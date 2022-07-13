@@ -1,0 +1,415 @@
+package com.pat.service;
+
+import java.io.ByteArrayOutputStream;
+import java.io.FileOutputStream;
+import java.lang.reflect.Field;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.core.ElasticsearchTemplate;
+import org.springframework.data.elasticsearch.core.MultiGetItem;
+import org.springframework.data.elasticsearch.core.SearchHits;
+import org.springframework.data.elasticsearch.core.query.NativeSearchQuery;
+import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import org.springframework.stereotype.Service;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook; 
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.elasticsearch.index.query.BoolQueryBuilder;
+import org.elasticsearch.index.query.QueryBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
+
+import com.pat.model.BillingFtpInvoice;
+import com.pat.model.BillingFtpInvoiceSearch;
+//import com.pat.repository.BillingFtpInvoiceRepo;
+
+import lombok.extern.slf4j.Slf4j;
+
+@Service
+@Slf4j
+public class BillingFtpInvoiceServiceImpl implements BillingFtpInvoiceService {
+	
+	@Autowired
+	JdbcTemplate jdbcTemplate; 
+	
+	@Autowired
+	NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+	
+	@Autowired
+	private Properties BillingFtpInvoiceQueriesBean;
+	
+//	@Autowired
+//	private BillingFtpInvoiceRepo bfiRepo;
+	
+	@Autowired
+	ElasticsearchRestTemplate elasticsearchRestTemplate;
+		
+	@Override
+	public Map<String, Object> addInvoices(BillingFtpInvoice bfi) {
+		
+		insertData(bfi);
+		 
+		Map<String, Object> responseData = new HashMap<String, Object>();		
+				
+		try{
+			
+			String sql = BillingFtpInvoiceQueriesBean.getProperty("Add_Ftp_Invoice_Data");
+			
+			if( sql==null || sql=="")
+			{
+				throw new Exception("--------- SQL should not be null... ---------");
+			}
+			
+			if(bfi.getBill_to_code()==null|| bfi.getBill_to_code().isBlank() || bfi.getService_offering()==null || bfi.getService_offering().isBlank() 
+					|| bfi.getDoc_type()==null || bfi.getDoc_type().isBlank() || bfi.getStatus()==null || bfi.getStatus().isBlank()
+					|| bfi.getFile_name()==null || bfi.getFile_name().isBlank() || bfi.getTransaction_id()==0 || bfi.getTransaction_id()<0 
+					|| bfi.getFailure_reason()==null || bfi.getFailure_reason().isBlank() || bfi.getCreate_user_id()==null || bfi.getCreate_user_id().isBlank()
+					|| bfi.getCreate_program_name()==null || bfi.getCreate_program_name().isBlank() || bfi.getBusiness_unit()==null|| bfi.getBusiness_unit().isBlank())
+			{
+			
+				throw new Exception(bfi.getClass()+" --------- Fields shoud not be null... ---------");
+			}
+			
+			String billToCode = bfi.getBill_to_code().concat("_FTP");
+			
+			SqlParameterSource param = new MapSqlParameterSource().addValue("bill_to_code", billToCode).addValue("business_unit", bfi.getBusiness_unit())
+				.addValue("service_offering", bfi.getService_offering()).addValue("doc_type", bfi.getDoc_type())
+				.addValue("status", bfi.getStatus()).addValue("file_name", bfi.getFile_name())
+				.addValue("transaction_id", bfi.getTransaction_id()).addValue("failure_reason", bfi.getFailure_reason())
+				.addValue("create_user_id", bfi.getCreate_user_id()).addValue("create_program_name", bfi.getCreate_program_name());
+		
+			int response = namedParameterJdbcTemplate.update(sql, param);
+			
+				if(response>0)
+				{		
+					log.info("--------- BillingFtpInvoice Inserted Successfully... ---------");
+					responseData.put("Success", "BillingFtpInvoice Inserted Successfully...");
+				}
+				else
+				{
+					log.info("--------- BillingFtpInvoice Failed to Insert.... ---------");
+					responseData.put("Failed", "BillingFtpInvoice Failed to Insert....");
+				}			
+			}
+			catch(Exception e)
+			{
+				e.printStackTrace();
+				log.error("Error at addInvoice method...{}", e.getMessage());
+			}
+			return responseData;
+			
+			
+			
+	}
+	
+	
+	@Override
+	public List<Map<String, Object>> getAllInvoicesSearch(BillingFtpInvoiceSearch bfi)  {
+						 	
+		Map<String,Object> dataMap; 
+		
+//		Map<String,Object> countMap = new HashMap<String, Object>();
+		
+		List<Map<String, Object>> response = new ArrayList<Map<String,Object>>();
+		
+		try 
+		{		
+			String sql = BillingFtpInvoiceQueriesBean.getProperty("Get_Ftp_Invoice_Data");
+			
+			if(sql==null || sql=="")
+			{
+				throw new Exception("--------- SQL should not be null... ---------");
+			}
+						
+			if(bfi.getBilling_ftp_invoice_id()>0)
+			{
+				sql += " AND billing_ftp_invoice_id="+bfi.getBilling_ftp_invoice_id();
+			}
+			if(bfi.getBill_to_code()!=null && !"".equals(bfi.getBill_to_code().trim())) 
+			{
+				sql += " AND bill_to_code='"+bfi.getBill_to_code()+"'";
+			}
+			if(bfi.getBusiness_unit()!=null && !"".equals(bfi.getBusiness_unit().trim())) 
+			{
+				sql += " AND business_unit='"+bfi.getBusiness_unit()+"'";
+			}
+			if(bfi.getService_offering()!=null && !"".equals(bfi.getService_offering().trim())) 
+			{
+				sql += " AND service_offering='"+bfi.getService_offering()+"'";
+			}
+			if(bfi.getTransaction_date()!=null && !"".equals(bfi.getTransaction_date().trim())) 
+			{
+				sql += " AND transaction_date LIKE '"+bfi.getTransaction_date()+"%'";
+			}
+			if(bfi.getStatus()!=null && !"".equals(bfi.getStatus().trim())) 
+			{
+				sql += " AND status='"+bfi.getStatus()+"'";
+			}
+			if(bfi.getFile_name()!=null && !"".equals(bfi.getFile_name().trim())) 
+			{
+				sql += " AND file_name='"+bfi.getFile_name()+"'";
+			}
+			if(bfi.getTransaction_id()!=0) 
+			{
+				sql += " AND transaction_id="+bfi.getTransaction_id();
+			}
+		
+//			sql += " ORDER BY transaction_id LIMIT 5";
+		
+			List<Map<String, Object>> dataList = jdbcTemplate.queryForList(sql);
+				
+			
+//			countMap.put("Data Count", dataList.size());
+//			response.add(countMap);
+			
+			for(Map<String, Object> row:dataList)
+			{
+				dataMap = new HashMap<String, Object>();
+			
+				String btc = row.get("bill_to_code").toString();
+				
+				dataMap.put("BillingFtpInvoiceId", row.get("billing_ftp_invoice_id"));
+				dataMap.put("BillToCode", btc);
+				dataMap.put("BusinessUnit", row.get("business_unit"));
+				dataMap.put("ServiceOffering", row.get("service_offering"));
+				dataMap.put("DocType", row.get("doc_type"));
+				dataMap.put("TransactionDate", row.get("transaction_date"));
+				dataMap.put("Status", row.get("status"));
+				dataMap.put("FileName", row.get("file_name"));
+				dataMap.put("TransactionId", row.get("transaction_id"));
+				dataMap.put("FailureReason", row.get("failure_reason"));
+				dataMap.put("CreateUserId", row.get("create_user_id"));
+				dataMap.put("CreateProgramName", row.get("create_program_name"));
+				dataMap.put("CreateTimestamp", row.get("create_timestamp"));
+				
+				response.add(dataMap);
+			
+			}
+		}		
+		catch(Exception e)
+		{
+			e.printStackTrace();
+			log.error("--------- Error at getAllInvoicesSearch method...{} ---------", e.getMessage());
+		}
+		
+		return response;
+		
+	}	
+	
+	
+/*=============================================================================================================
+=============================================== ElastiSearch ==================================================
+===============================================================================================================*/
+	
+	
+//	public Map<String, Object> insertData(BillingFtpInvoice bfi)
+//	{
+//		String date = ""+java.time.LocalDateTime.now();
+//		
+//		bfi.setId(bfi.getBilling_ftp_invoice_id());
+//		bfi.setTransaction_date(date);
+//		bfi.setCreate_timestamp(date);
+//		
+//		Map<String, Object> response = new HashMap<String, Object>();
+//		
+//		bfiRepo.save(bfi);
+//		
+//		response.put("Message", "Success...!");
+//		
+//		return response;
+//	}
+//	
+//	public List<BillingFtpInvoice> getData()
+//	{
+//		return bfiRepo.findAll();
+//	}
+//	
+//	public Map<String, Object> deleteData(int id)
+//	{
+//		Map<String, Object> response = new HashMap<String, Object>();
+//		
+//		Optional<BillingFtpInvoice> res = bfiRepo.findById(id);
+//		
+//		if(res.isPresent())
+//		{
+//			bfiRepo.deleteById(id);
+//			
+//			response.put("Message", "Deleted...!");
+//		}
+//		else
+//		{
+//			response.put("Message", "Given Id Doesn't Exist...!");
+//		}
+//		
+//		
+//		return response;
+//	}
+//	
+//	public Optional<BillingFtpInvoice> getDataById(int id)
+//	{
+//		Optional<BillingFtpInvoice> res = bfiRepo.findById(id);
+//		
+//		return res;
+//	}
+//	
+//	
+//	public List<BillingFtpInvoice> findByName(String code,String status)
+//	{
+//		
+//		
+//		return bfiRepo.findByIdandName(code,status);
+//	}
+//	
+//	public SearchHits<BillingFtpInvoice> findByNameandStatus(String code,String status)
+//	{
+//		QueryBuilder qb = QueryBuilders.boolQuery().must(QueryBuilders.matchQuery("doc_type", code)).
+//				must(QueryBuilders.matchQuery("status", status));
+//		
+//		NativeSearchQuery nsq = new NativeSearchQueryBuilder().withQuery(qb).build();
+//		
+//		SearchHits<BillingFtpInvoice> bfi = elasticsearchRestTemplate.search(nsq, BillingFtpInvoice.class);
+//		
+//		return bfi;
+//	}
+//	
+//	public SearchHits<BillingFtpInvoice> findAllByFields(BillingFtpInvoiceSearch bfi)
+//	{
+//		BoolQueryBuilder query = QueryBuilders.boolQuery();
+//		
+//		if(bfi.getBilling_ftp_invoice_id()>0)
+//		{
+//			query.must(QueryBuilders.termQuery("billing_ftp_invoice_id", bfi.getBilling_ftp_invoice_id()));
+//		}
+//		if(bfi.getBill_to_code()!=null && !"".equals(bfi.getBill_to_code().trim())) 
+//		{
+//			query.must(QueryBuilders.termQuery("bill_to_code", bfi.getBill_to_code()));
+//		}
+//		if(bfi.getBusiness_unit()!=null && !"".equals(bfi.getBusiness_unit().trim())) 
+//		{
+//			query.must(QueryBuilders.termQuery("business_unit", bfi.getBusiness_unit()));
+//		}
+//		if(bfi.getService_offering()!=null && !"".equals(bfi.getService_offering().trim())) 
+//		{
+//			query.must(QueryBuilders.termQuery("service_offering", bfi.getService_offering()));
+//		}
+//		if(bfi.getTransaction_date()!=null && !"".equals(bfi.getTransaction_date().trim())) 
+//		{
+//			query.must(QueryBuilders.termQuery("transaction_date", bfi.getTransaction_date()));
+//		}
+//		if(bfi.getStatus()!=null && !"".equals(bfi.getStatus().trim())) 
+//		{
+//			query.must(QueryBuilders.termQuery("status", bfi.getStatus()));
+//		}
+//		if(bfi.getFile_name()!=null && !"".equals(bfi.getFile_name().trim())) 
+//		{
+//			query.must(QueryBuilders.termQuery("file_name", bfi.getFile_name()));
+//		}
+//		if(bfi.getTransaction_id()!=0) 
+//		{
+//			query.must(QueryBuilders.termQuery("transaction_id", bfi.getTransaction_id()));
+//		}
+//		
+//		NativeSearchQuery nsq = new NativeSearchQueryBuilder().withQuery(query).build();
+//		
+//		SearchHits<BillingFtpInvoice> response = elasticsearchRestTemplate.search(nsq, BillingFtpInvoice.class);
+//		
+//		return response;
+//	}
+//	
+//	
+//	public SearchHits<BillingFtpInvoice> findByOneName(String code)
+//	{
+//		String search = ".*"+ code +".*";
+//		
+//		NativeSearchQuery nsq = new NativeSearchQueryBuilder().
+//				withFilter(QueryBuilders.regexpQuery("doc_type", search)).build();		
+//
+//		SearchHits<BillingFtpInvoice> bfi = elasticsearchRestTemplate.search(nsq, BillingFtpInvoice.class);
+//		
+//		return bfi;
+//	}
+//	
+//	
+	
+	
+/*=============================================================================================================
+=============================================== Excel Export ==================================================
+===============================================================================================================*/
+	
+	
+	
+//	public ResponseEntity<ByteArrayResource> dbToExcelDownload()
+//	 {
+//		
+//		String headers[] = {"BillingFtpInvoiceId","BillToCode","BusinessUnit","ServiceOffering","DocType",
+//				"TransactionDate","Status","FileName","TransactionId","FailureReason","CreateUserId",
+//				"CreateProgramName","CreateTimestamp"};
+//		
+//		 try {
+//	        	String query = BillingFtpInvoiceQueriesBean.getProperty("Get_Ftp_Invoice_Data");
+//	    		List<Map<String, Object>> list = jdbcTemplate.queryForList(query);
+//	    		Workbook workbook = new HSSFWorkbook();
+//	    		Sheet sheet = workbook.createSheet("Sheet1");
+//	    		Row row = sheet.createRow(0);
+//	    		
+//	    		for(int i=0;i<headers.length;i++)
+//	    		{
+//	    		Cell cell = row.createCell(i);
+//	    		cell.setCellValue(headers[i]);
+//	    		}
+//
+//	    		for (int i = 0; i < list.size(); i++) 
+//	    		{
+//	    			Map<String, Object> map = list.get(i);
+//	    			Row datarow = sheet.createRow(i + 1);
+//	    			datarow.createCell(0).setCellValue((int) map.get("billing_ftp_invoice_id"));
+//	    			datarow.createCell(1).setCellValue((String) map.get("bill_to_code"));
+//	    			datarow.createCell(2).setCellValue((String) map.get("business_unit"));
+//	    			datarow.createCell(3).setCellValue((String) map.get("service_offering"));
+//	    			datarow.createCell(4).setCellValue((String) map.get("doc_type"));
+//	    			datarow.createCell(5).setCellValue((String) map.get("transaction_date").toString());
+//	    			datarow.createCell(6).setCellValue((String) map.get("status"));
+//	    			datarow.createCell(7).setCellValue((String) map.get("file_name"));
+//	    			datarow.createCell(8).setCellValue((int) map.get("transaction_id"));
+//	    			datarow.createCell(9).setCellValue((String) map.get("failure_reason"));
+//	    			datarow.createCell(10).setCellValue((String) map.get("create_user_id"));
+//	    			datarow.createCell(11).setCellValue((String) map.get("create_program_name"));
+//	    			datarow.createCell(12).setCellValue((String) map.get("create_timestamp").toString());
+//	    			
+//	    		}
+////	    		FileOutputStream out = new FileOutputStream("C:\\Users\\vguttula\\Desktop\\sample.xlsx");
+////	    		workbook.write(out);
+//	            ByteArrayOutputStream stream = new ByteArrayOutputStream();
+//	            HttpHeaders header = new HttpHeaders();
+//	            header.setContentType(new MediaType("application", "download"));
+////	            header.set(HttpHeaders.CONTENT_DISPOSITION, "filename=bfi.xlsx");
+//	            workbook.write(stream);
+//	            workbook.close();
+//	            return new ResponseEntity<>(new ByteArrayResource(stream.toByteArray()),header, HttpStatus.CREATED );
+//	        } 
+//	        catch (Exception e)
+//	        {
+//	           e.printStackTrace();
+//	           return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
+//	        }
+//	 }
+
+}
